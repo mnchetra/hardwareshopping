@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { PRODUCTS } from './data/products';
+import { normalizeProduct, fetchProductsApi, createProductApi, deleteProductApi } from './api';
 import { Navbar } from './components/Navbar';
 import { ProductCard } from './components/ProductCard';
 import { ProductQuickViewModal } from './components/ProductQuickViewModal';
+import { AddProductModal } from './components/AddProductModal';
 import { CartView } from './components/CartView';
 import { CheckoutModal } from './components/CheckoutModal';
 import { Toast } from './components/Toast';
@@ -17,7 +19,8 @@ import {
   Truck,
   RotateCcw,
   ArrowRight,
-  ShoppingBag
+  ShoppingBag,
+  Plus
 } from './components/Icons';
 import './App.css';
 
@@ -34,6 +37,10 @@ export default function App() {
   });
 
   const [activeTab, setActiveTab] = useState('shop'); // 'shop' or 'cart'
+  const [products, setProducts] = useState(() => PRODUCTS.map(normalizeProduct));
+  const [isApiConnected, setIsApiConnected] = useState(false);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  const [isAddProductOpen, setIsAddProductOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [sortBy, setSortBy] = useState('featured');
@@ -41,6 +48,41 @@ export default function App() {
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [checkoutSummary, setCheckoutSummary] = useState(null);
   const [quickViewProduct, setQuickViewProduct] = useState(null);
+
+  // Load products from Laravel API
+  const loadProducts = async (showFeedback = false) => {
+    setIsLoadingProducts(true);
+    try {
+      const apiData = await fetchProductsApi();
+      if (apiData && apiData.length > 0) {
+        setProducts(apiData);
+      } else {
+        // If API returned empty array, keep API status connected
+        setProducts(apiData);
+      }
+      setIsApiConnected(true);
+      if (showFeedback) {
+        showNotification('Connected to API', 'Live product catalog synchronized from Laravel.', 'success');
+      }
+    } catch {
+      setIsApiConnected(false);
+      // Fallback to local products
+      setProducts(PRODUCTS.map(normalizeProduct));
+      if (showFeedback) {
+        showNotification(
+          'API Offline',
+          'Using demo catalog. Run "php artisan serve" in your Laravel terminal to connect.',
+          'info'
+        );
+      }
+    } finally {
+      setIsLoadingProducts(false);
+    }
+  };
+
+  useEffect(() => {
+    loadProducts(false);
+  }, []);
 
   // Sync cart to localStorage
   useEffect(() => {
@@ -125,6 +167,36 @@ export default function App() {
     showNotification('Order Confirmed!', `Order #${orderId} was placed.`, 'success');
   };
 
+  // Handle Add Product (Laravel API with local catalog fallback)
+  const handleCreateProduct = async (newProductData) => {
+    if (isApiConnected) {
+      const created = await createProductApi(newProductData);
+      setProducts((prev) => [created, ...prev]);
+      showNotification('Product Created', `${created.name} saved to Laravel database!`, 'success');
+    } else {
+      const fallbackItem = normalizeProduct({
+        ...newProductData,
+        id: `local-${Date.now()}`
+      });
+      setProducts((prev) => [fallbackItem, ...prev]);
+      showNotification('Product Added', `${newProductData.name} added to catalog.`, 'success');
+    }
+  };
+
+  // Handle Delete Product
+  const handleDeleteProduct = async (productId) => {
+    try {
+      if (isApiConnected && (typeof productId === 'number' || !String(productId).startsWith('prod-'))) {
+        await deleteProductApi(productId);
+      }
+      setProducts((prev) => prev.filter((p) => p.id !== productId));
+      setCart((prev) => prev.filter((item) => item.product.id !== productId));
+      showNotification('Product Removed', 'The item was deleted.', 'info');
+    } catch (err) {
+      showNotification('Delete Failed', err.message || 'Could not delete product.', 'error');
+    }
+  };
+
   // Filter & Sort Categories
   const categories = [
     { label: 'All Essentials', value: 'All' },
@@ -136,9 +208,10 @@ export default function App() {
     { label: 'Accessories', value: 'Accessories' }
   ];
 
-  const filteredProducts = PRODUCTS.filter((product) => {
+  const filteredProducts = products.filter((product) => {
     const matchesCategory =
-      selectedCategory === 'All' || product.category === selectedCategory;
+      selectedCategory === 'All' ||
+      product.category.toLowerCase() === selectedCategory.toLowerCase();
     const matchesSearch =
       product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       product.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -238,8 +311,39 @@ export default function App() {
                   ))}
                 </div>
 
-                {/* Right toolbar controls: Count & Sort */}
+                {/* Right toolbar controls: API Status, Add Product, Count & Sort */}
                 <div className="toolbar-right-group">
+                  <div
+                    className={`api-status-pill ${isApiConnected ? 'online' : 'offline'}`}
+                    title={
+                      isApiConnected
+                        ? 'Connected to Laravel Backend API (http://127.0.0.1:8000/api)'
+                        : 'API offline: Run "php artisan serve" or click refresh to retry'
+                    }
+                  >
+                    <span className="api-dot" />
+                    <span className="api-label">{isApiConnected ? 'Laravel API Live' : 'Demo Mode'}</span>
+                    <button
+                      type="button"
+                      className={`api-refresh-icon-btn ${isLoadingProducts ? 'spinning' : ''}`}
+                      onClick={() => loadProducts(true)}
+                      disabled={isLoadingProducts}
+                      aria-label="Refresh from Laravel API"
+                      title="Sync with Laravel API"
+                    >
+                      ↻
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="add-product-trigger-btn"
+                    onClick={() => setIsAddProductOpen(true)}
+                  >
+                    <Plus size={15} />
+                    <span>Add Product</span>
+                  </button>
+
                   <span className="products-count-badge">
                     {filteredProducts.length} {filteredProducts.length === 1 ? 'product' : 'products'}
                   </span>
@@ -312,11 +416,20 @@ export default function App() {
         isOpen={Boolean(quickViewProduct)}
         onClose={() => setQuickViewProduct(null)}
         onAddToCart={handleAddToCart}
+        onDeleteProduct={handleDeleteProduct}
         inCartQty={
           quickViewProduct
             ? cart.find((i) => i.product.id === quickViewProduct.id)?.quantity || 0
             : 0
         }
+      />
+
+      {/* Add Product Modal */}
+      <AddProductModal
+        isOpen={isAddProductOpen}
+        onClose={() => setIsAddProductOpen(false)}
+        onAddProduct={handleCreateProduct}
+        isApiConnected={isApiConnected}
       />
 
       {/* Checkout Modal */}

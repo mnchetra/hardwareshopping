@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, Star, ShoppingCart, Check, Plus, Minus, ShieldCheck, Truck, RotateCcw } from './Icons';
 
-export function ProductQuickViewModal({ product, isOpen, onClose, onAddToCart, inCartQty = 0 }) {
+export function ProductQuickViewModal({ product, isOpen, onClose, onAddToCart, onDeleteProduct, inCartQty = 0 }) {
   const [qty, setQty] = useState(1);
   const [isAdded, setIsAdded] = useState(false);
 
@@ -115,6 +115,23 @@ export function ProductQuickViewModal({ product, isOpen, onClose, onAddToCart, i
               <p className="quickview-incart-note">
                 Currently <strong>{inCartQty}</strong> in your cart.
               </p>
+            )}
+
+            {onDeleteProduct && (
+              <div className="quickview-admin-row">
+                <button
+                  type="button"
+                  className="quickview-delete-btn"
+                  onClick={() => {
+                    if (window.confirm(`Delete "${product.name}"?`)) {
+                      onDeleteProduct(product.id);
+                      onClose();
+                    }
+                  }}
+                >
+                  Delete Product
+                </button>
+              </div>
             )}
 
             {/* Perks */}
